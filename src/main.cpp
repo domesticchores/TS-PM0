@@ -1,56 +1,76 @@
 #include <Arduino.h>
 #include "AudioTools.h"
-#include "BluetoothA2DPSink.h"
+#include "AudioTools/Communication/A2DPStream.h"
 
-#include "driver/i2s.h"
-#include "BluetoothA2DPSink.h"
+// pin definitions
+#define PIN_BCK         25
+#define PIN_WS          27
+#define PIN_DATA_OUT    26
 
-BluetoothA2DPSink a2dp_sink;
+// 44.1khz, 2-channel, 16-bit
+AudioInfo info(44100, 2, 16);
 
-// STATE CHANGE HANDLERS
-void connection_state_changed(esp_a2d_connection_state_t state, void *ptr){
-    Serial.println(a2dp_sink.to_str(state));
+A2DPStream a2dp;
+I2SStream i2s;
+
+// ACCOUNTING FOR MY GARBAGE SPEAKERS. THIS WOULD NOT
+// BE NEEDED IF I DIDNT HAVE TRASH SPEAKERS. OH MY GOD.
+const float HP_CUTOFF = 80.0;
+
+FilteredStream<int16_t, float> hp_stream(i2s, 2);
+Equalizer3Bands eq(hp_stream);
+HighPassFilter<float> hp_left(HP_CUTOFF, 44100);
+HighPassFilter<float> hp_right(HP_CUTOFF, 44100);
+
+StreamCopy copier(eq, a2dp, 2048);  // a2dp -> eq -> i2s
+
+// run as task rather than in main loop to prevent interrupts
+void audioTask(void *param) {
+  while (true) {
+    copier.copy();
+  }
 }
 
-void audio_state_changed(esp_a2d_audio_state_t state, void *ptr){
-  Serial.println(a2dp_sink.to_str(state));
-}
-
-// SETUP: define configs, start bluetooth service
 void setup() {
     Serial.begin(115200);
+    AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Warning);
 
-    static i2s_config_t i2s_config = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-        .sample_rate = 44100,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 16,
-        .dma_buf_len = 512,
-        .use_apll = true,
-        .tx_desc_auto_clear = true
-    };
+    // config i2s
+    auto i2s_cfg = i2s.defaultConfig(TX_MODE);
+    i2s_cfg.copyFrom(info);
+    i2s_cfg.pin_bck  = PIN_BCK;
+    i2s_cfg.pin_ws   = PIN_WS;
+    i2s_cfg.pin_data = PIN_DATA_OUT;
+    i2s.begin(i2s_cfg);
 
-    static i2s_pin_config_t pin_config = {
-        .bck_io_num = 25,
-        .ws_io_num = 27,
-        .data_out_num = 26,
-        .data_in_num = I2S_PIN_NO_CHANGE
-    };
+    // config eq, lower bass so it doesn't sound awful :sob:
+    auto eq_cfg = eq.defaultConfig();
+    eq_cfg.copyFrom(info);
+    eq_cfg.sample_rate     = 44100;
+    eq_cfg.channels        = 2;
+    eq_cfg.bits_per_sample = 16;
+    eq_cfg.gain_low    = 1.0;
+    eq_cfg.gain_medium = 1.0;
+    eq_cfg.gain_high   = 1.0;
 
-    // INITIALIZE BLUETOOTH
-    a2dp_sink.set_i2s_config(i2s_config);
-    a2dp_sink.set_pin_config(pin_config);
-    a2dp_sink.set_default_bt_mode(ESP_BT_MODE_CLASSIC_BT);
-    a2dp_sink.set_on_connection_state_changed(connection_state_changed);
-    a2dp_sink.set_on_audio_state_changed(audio_state_changed);
-    a2dp_sink.start("TS-PM0");
-    a2dp_sink.set_volume(107);
+    // pass filters before eq starts
+    hp_stream.setFilter(0, &hp_left);
+    hp_stream.setFilter(1, &hp_right);
+    hp_stream.begin(info);
+    // start eq
+    eq.begin(eq_cfg);
+
+    // config bluetooth
+    auto a2dp_cfg = a2dp.defaultConfig(RX_MODE);
+    a2dp_cfg.name = "TS-PM0";
+    a2dp.begin(a2dp_cfg);
+
+    // start audio task on core 1 (highest priority)
+    xTaskCreatePinnedToCore(audioTask, "audio", 4096, nullptr, 5, nullptr, 1);
+
     Serial.println("Bluetooth started");
 }
 
 void loop() {
-    // nothing needed here yet, init functions to be added
+    // nothing !11
 }
