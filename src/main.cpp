@@ -63,6 +63,7 @@ void setup() {
     // config bluetooth
     auto a2dp_cfg = a2dp.defaultConfig(RX_MODE);
     a2dp_cfg.name = "TS-PM0";
+    a2dp_cfg.wait_for_connection = false;
     a2dp.begin(a2dp_cfg);
 
     // start audio task on core 1 (highest priority)
