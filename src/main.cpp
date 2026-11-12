@@ -31,6 +31,14 @@ void audioTask(void *param) {
   }
 }
 
+void connection_change_callback(esp_a2d_connection_state_t state, void *ptr) {
+  if (state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
+    Serial.println("bluetooth connected");
+  } else if (state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+    Serial.println("bluetooth disconnected");
+  }
+}
+
 void setup() {
     Serial.begin(115200);
     AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Warning);
@@ -65,6 +73,9 @@ void setup() {
     a2dp_cfg.name = "TS-PM0";
     a2dp_cfg.wait_for_connection = false;
     a2dp.begin(a2dp_cfg);
+
+    // set up callbacks
+    a2dp.sink().set_on_connection_state_changed(connection_change_callback);
 
     // start audio task on core 1 (highest priority)
     xTaskCreatePinnedToCore(audioTask, "audio", 4096, nullptr, 5, nullptr, 1);
